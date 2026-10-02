@@ -36,6 +36,25 @@ signature of the pointer, otherwise the call fails in WebAssembly with
 When updating to a newer PCE version, copy its `src/` directory and build
 files over this tree and re-apply these changes.
 
+## Prebuilt files
+
+`dist/` contains prebuilt emulators, so you don't have to build them yourself:
+
+- `pcejs-<arch>.umd.js`: the emulator as a UMD bundle for `<script>` tags
+  (globals `PCEJSAtariST`, `PCEJSMacPlus`, `PCEJSIBMPC`), plus
+  `pcejs-util.umd.js` (`PCEJSUtil`, loading progress display)
+- `pce-<arch>.wasm`: the emulator code, loaded from the directory of the UMD
+  bundle (pass `locateFile` to load it from somewhere else)
+- `pce-<arch>.js`: the plain emscripten output, if you want to use your own
+  wrapper
+- `data/<arch>/<arch>-pcex.rom`: the PCE ROM extension for the Mac Plus and
+  IBM PC. Use this one instead of the one from the system zip files, it must
+  match the emulator version.
+
+`<arch>` is `atarist`, `macplus` or `ibmpc`. See `example/*/index.html` for how
+to start an emulator, and rebuild `dist/` with `./pcejs_build` followed by
+`./umd.sh` in each `commonjs/pcejs-*` directory.
+
 ## How to run PCE.js on your own website
 
 See [this CodePen example](https://codepen.io/jsdf/pen/gOLryXM?editors=1100).
