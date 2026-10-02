@@ -34,9 +34,20 @@
 
 
 #ifndef DEBUG_BIOS
-#define DEBUG_BIOS 1
+#define DEBUG_BIOS 0
 #endif
+
+#ifdef EMSCRIPTEN
 #include <emscripten.h>
+#endif
+
+/*
+ * The longest real time interval (in ms) that is emulated in one main loop
+ * iteration. If more time has passed (e.g. because the browser tab was in
+ * the background or the host is too slow), the emulation falls behind
+ * real time instead of trying to catch up.
+ */
+#define ST_EMSCRIPTEN_MAX_MS 100
 
 
 mon_cmd_t par_cmd[] = {
@@ -50,7 +61,7 @@ mon_cmd_t par_cmd[] = {
 	{ "reset", "", "reset" },
 	{ "rte", "", "execute to next rte" },
 	{ "r", "reg [val]", "get or set a register" },
-	{ "s", "[what]", "print status (cpu|mem)" },
+	{ "s", "[what]", "print status (acia0|acia1|cpu|dma|mem|mfp|psg|video)" },
 	{ "t", "[cnt]", "execute cnt instructions [1]" },
 	{ "u", "[[-]addr [cnt]]", "disassemble" }
 };
@@ -314,6 +325,75 @@ void st_print_state_mem (atari_st_t *sim)
 }
 
 static
+void st_print_state_psg (atari_st_t *sim)
+{
+	st_psg_t *psg;
+
+	pce_prt_sep ("PSG");
+
+	psg = &sim->psg;
+
+	pce_printf ("R%02X=%02X  PA=%u\n", 0, psg->reg[0],
+		((psg->reg[1] << 8) | (psg->reg[0])) & 0x3ff
+	);
+
+	pce_printf ("R%02X=%02X\n", 1, psg->reg[1]);
+
+	pce_printf ("R%02X=%02X  PB=%u\n", 2, psg->reg[2],
+		((psg->reg[3] << 8) | (psg->reg[2])) & 0x3ff
+	);
+
+	pce_printf ("R%02X=%02X\n", 3, psg->reg[3]);
+
+	pce_printf ("R%02X=%02X  PC=%u\n", 4, psg->reg[4],
+		((psg->reg[5] << 8) | (psg->reg[4])) & 0x3ff
+	);
+
+	pce_printf ("R%02X=%02X\n", 5, psg->reg[5]);
+
+	pce_printf ("R%02X=%02X  PN=%u\n", 6, psg->reg[6],
+		psg->reg[6] & 0x1f
+	);
+
+	pce_printf ("R%02X=%02X  N=%c%c%c  T=%c%c%c\n", 7, psg->reg[7],
+		(psg->reg[7] & 8) ? 'a' : 'A',
+		(psg->reg[7] & 16) ? 'b' : 'B',
+		(psg->reg[7] & 32) ? 'c' : 'C',
+		(psg->reg[7] & 1) ? 'a' : 'A',
+		(psg->reg[7] & 2) ? 'b' : 'B',
+		(psg->reg[7] & 4) ? 'c' : 'C'
+	);
+
+	pce_printf ("R%02X=%02X  VA=%u  %c\n", 8, psg->reg[8],
+		psg->reg[8] & 0x0f,
+		(psg->reg[8] & 0x10) ? 'M' : '-'
+	);
+
+	pce_printf ("R%02X=%02X  VB=%u  %c\n", 9, psg->reg[9],
+		psg->reg[9] & 0x0f,
+		(psg->reg[9] & 0x10) ? 'M' : '-'
+	);
+
+	pce_printf ("R%02X=%02X  VC=%u  %c\n", 10, psg->reg[10],
+		psg->reg[10] & 0x0f,
+		(psg->reg[10] & 0x10) ? 'M' : '-'
+	);
+
+	pce_printf ("R%02X=%02X  PE=%u\n", 11, psg->reg[11],
+		((psg->reg[12] << 8) | (psg->reg[11])) & 0xffff
+	);
+
+	pce_printf ("R%02X=%02X\n", 12, psg->reg[12]);
+
+	pce_printf ("R%02X=%02X  ENV=%X\n", 13, psg->reg[13],
+		psg->reg[13] & 0x0f
+	);
+
+	pce_printf ("R%02X=%02X\n", 14, psg->reg[14]);
+	pce_printf ("R%02X=%02X\n", 15, psg->reg[15]);
+}
+
+static
 void st_print_state_video (atari_st_t *sim)
 {
 	unsigned   i;
@@ -376,6 +456,9 @@ void st_print_state (atari_st_t *sim, const char *str)
 		}
 		else if (cmd_match (&cmd, "mfp")) {
 			st_print_state_mfp (sim);
+		}
+		else if (cmd_match (&cmd, "psg")) {
+			st_print_state_psg (sim);
 		}
 		else if (cmd_match (&cmd, "video")) {
 			st_print_state_video (sim);
@@ -487,6 +570,11 @@ atari_st_t  *atari_st_sim = NULL;
 
 /*
  * setup and run the simulation
+ *
+ * In the browser the main loop is driven by requestAnimationFrame. Each
+ * iteration emulates the real time that has passed since the previous one,
+ * so that every emulated video frame can be shown and no time is wasted
+ * busy waiting to stay in sync with real time.
  */
 void st_run_emscripten (atari_st_t *sim)
 {
@@ -496,9 +584,8 @@ void st_run_emscripten (atari_st_t *sim)
 
 	st_clock_discontinuity (sim);
 
-
 	#ifdef EMSCRIPTEN
-	emscripten_set_main_loop(st_run_emscripten_step, 100, 1);
+	emscripten_set_main_loop(st_run_emscripten_step, 0, 1);
 	#else
 	while (!sim->brk) {
 		st_run_emscripten_step();
@@ -514,13 +601,35 @@ void st_run_emscripten (atari_st_t *sim)
  */
 void st_run_emscripten_step ()
 {
-	// for each 'emscripten step' we'll run a bunch of actual cycles
-	// to minimise overhead from emscripten's main loop management
-	int i;
-	for (i = 0; i < 10000; ++i)
-	{	
+	static unsigned long clk_rem = 0;
+	unsigned long        clk;
+
+	#ifdef EMSCRIPTEN
+	static double last = -1.0;
+	double        now, ms;
+
+	now = emscripten_get_now();
+
+	if ((last < 0.0) || (now < last)) {
+		last = now;
+	}
+
+	ms = now - last;
+	last = now;
+
+	if (ms > ST_EMSCRIPTEN_MAX_MS) {
+		ms = ST_EMSCRIPTEN_MAX_MS;
+	}
+
+	clk = clk_rem + (unsigned long) (ms * (ST_CPU_CLOCK / 1000));
+	#else
+	/* st_clock() keeps real time by sleeping */
+	clk = clk_rem + ST_CPU_CLOCK / 25;
+	#endif
+
+	while (clk >= 16) {
 		st_clock (atari_st_sim, 0);
-		st_clock (atari_st_sim, 0);
+		clk -= 16;
 
 		if (atari_st_sim->brk) {
 			pce_stop();
@@ -530,7 +639,8 @@ void st_run_emscripten_step ()
 			return;
 		}
 	}
-	// emscripten_pause_main_loop();
+
+	clk_rem = clk;
 }
 /*
  * end emscripten specific main loop
@@ -830,6 +940,11 @@ void st_cmd_hm (cmd_t *cmd)
 			"\n"
 		"emu.par.driver       <driver>\n"
 		"emu.par.file         <filename>\n"
+			"\n"
+		"emu.psg.aym.file     <filename>\n"
+		"emu.psg.aym.res      <usec>\n"
+		"emu.psg.driver       <driver>\n"
+		"emu.psg.lowpass      <freq>\n"
 			"\n"
 		"emu.ser.driver       <driver>\n"
 		"emu.ser.file         <filename>\n"

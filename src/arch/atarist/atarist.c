@@ -56,6 +56,13 @@
 #include <libini/libini.h>
 
 
+/* The PSG sound driver used if none is configured */
+#ifdef EMSCRIPTEN
+#define ST_PSG_DEFAULT_DRIVER "sdl"
+#else
+#define ST_PSG_DEFAULT_DRIVER NULL
+#endif
+
 /* The CPU is synchronized with real time ST_CPU_SYNC times per seconds */
 #define ST_CPU_SYNC 250
 
@@ -463,11 +470,51 @@ void st_setup_rtc (atari_st_t *sim, ini_sct_t *ini)
 static
 void st_setup_psg (atari_st_t *sim, ini_sct_t *ini)
 {
-	pce_log_tag (MSG_INF, "PSG:", "initialized\n");
+	ini_sct_t     *sct;
+	const char    *drv, *aym;
+	int           highpass;
+	unsigned long lowpass, aymres, srate;
 
 	st_psg_init (&sim->psg);
 	st_psg_set_port_a_fct (&sim->psg, sim, st_set_port_a);
 	st_psg_set_port_b_fct (&sim->psg, sim, st_set_port_b);
+
+	/* sct is NULL if there is no psg section, in which case the defaults are used */
+	sct = ini_next_sct (ini, NULL, "psg");
+
+	ini_get_string (sct, "driver", &drv, ST_PSG_DEFAULT_DRIVER);
+	ini_get_string (sct, "aym", &aym, NULL);
+	ini_get_uint32 (sct, "aym_resolution", &aymres, 250);
+	ini_get_uint32 (sct, "sample_rate", &srate, 44100);
+	ini_get_uint32 (sct, "lowpass", &lowpass, 0);
+	ini_get_bool (sct, "highpass", &highpass, 1);
+
+	pce_log_tag (MSG_INF,
+		"PSG:", "driver=%s srate=%lu lowpass=%lu highpass=%d\n",
+		(drv != NULL) ? drv : "<none>",
+		srate, lowpass, highpass
+	);
+
+	st_psg_set_srate (&sim->psg, srate);
+
+	if (st_psg_set_driver (&sim->psg, drv)) {
+		pce_log (MSG_ERR, "*** can't open sound driver (%s)\n", drv);
+	}
+
+	if (aym != NULL) {
+		pce_log_tag (MSG_INF, "PSG:", "aym=%s resolution=%lu\n",
+			aym, aymres
+		);
+
+		if (st_psg_set_aym (&sim->psg, aym)) {
+			pce_log (MSG_ERR, "*** can't open aym file (%s)\n", aym);
+		}
+	}
+
+	st_psg_set_aym_resolution (&sim->psg, aymres);
+
+	st_psg_set_lowpass (&sim->psg, lowpass);
+	st_psg_set_highpass (&sim->psg, highpass);
 }
 
 static
@@ -768,6 +815,7 @@ void st_reset (atari_st_t *sim)
 	st_dma_reset (&sim->dma);
 	st_kbd_reset (&sim->kbd);
 	st_video_reset (sim->video);
+	st_psg_reset (&sim->psg);
 
 	mem_set_uint32_be (sim->mem, 0, mem_get_uint32_be (sim->mem, sim->rom_addr));
 	mem_set_uint32_be (sim->mem, 4, mem_get_uint32_be (sim->mem, sim->rom_addr + 4));
@@ -819,9 +867,15 @@ void st_realtime_sync (atari_st_t *sim, unsigned long n)
 			}
 		}
 
+#ifndef EMSCRIPTEN
+		/*
+		 * In the browser, real time is kept by the main loop
+		 * (st_run_emscripten_step) and sleeping would busy wait.
+		 */
 		if (sim->sync_sleep >= ST_CPU_SLEEP) {
 			pce_usleep (sim->sync_sleep);
 		}
+#endif
 
 		if (sim->sync_sleep < -1000000) {
 			st_log_deb ("system too slow, skipping 1 second\n");
@@ -850,6 +904,8 @@ void st_clock (atari_st_t *sim, unsigned n)
 	e68_clock (sim->cpu, cpuclk);
 
 	st_video_clock (sim->video, n);
+
+	st_psg_clock (&sim->psg, n);
 
 	sim->clk_div[0] += n;
 

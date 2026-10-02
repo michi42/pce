@@ -191,15 +191,13 @@ void st_mem_set_uint8 (void *ext, unsigned long addr, unsigned char val)
 		break;
 
 	case 0xff8800:
+	case 0xff8804:
 		st_psg_set_select (&sim->psg, val);
 		break;
 
 	case 0xff8802:
-		st_psg_set_data (&sim->psg, val);
-		break;
-
-	case 0xff8804:
 	case 0xff8806:
+		st_psg_set_data (&sim->psg, val);
 		break;
 
 	case 0xfffc00:

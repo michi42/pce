@@ -53,6 +53,13 @@ source ./emsdk_env.sh
 ```
 
 Check that running `emcc -v` successfully returns current Emscripten version.
+
+Note: emscripten 1.38.48 runs its scripts with `python`, so on systems that
+only have `python3` you need a `python` -> `python3` symlink in your `PATH`.
+`./configure` also runs small test programs with node; on node 18 and newer
+these fail ("Failed to parse URL") unless node's `fetch` is disabled, e.g. by
+setting `NODE_JS = ['/usr/bin/node', '--no-experimental-fetch']` in the
+emsdk's `.emscripten` config file.
 Detailed installation instructions are on the [Emscripten SDK](https://kripken.github.io/emscripten-site/docs/getting_started/downloads.html) page.
 
 In the same terminal, return to the pcejs repository. Run `./pcejs_build env` once which will create a `pcejs_build_conf.sh` file if it 
